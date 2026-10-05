@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin — ROKO Verify</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+body{font-family:system-ui,sans-serif;background:#EFE6D6;color:#12201F;margin:0;padding:16px}
+h1,h2{color:#0E3B43}section{background:#fff;padding:16px;border-radius:6px;margin-bottom:16px;max-width:900px}
+input,button,select{padding:10px;font:inherit;margin:4px 4px 4px 0;border:1px solid #0E3B43;border-radius:4px}
+button{background:#0E3B43;color:#fff;cursor:pointer}button.s{background:#fff;color:#0E3B43}
+.stats{display:flex;gap:12px;flex-wrap:wrap}.stats div{flex:1;min-width:110px;background:#EFE6D6;padding:12px;border-radius:4px}.stats b{display:block;font-size:1.6rem}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.9rem}td,th{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left;white-space:nowrap}
+#qr{margin-top:8px}.hide{display:none}
+</style></head><body>
+<h1>ROKO Verify — Admin</h1>
+<section id="login"><h2>Entrar</h2><input id="em" type="email" placeholder="e-mail"><input id="pw" type="password" placeholder="senha"><button onclick="login()">Entrar</button><span id="le"></span></section>
+<div id="app" class="hide">
+<section><div class="stats"><div><b id="s1">0</b>códigos</div><div><b id="s2">0</b>verificados</div><div><b id="s3">0</b>repetidos (2+)</div><div><b id="s4">0</b>inválidos tentados</div></div></section>
+<section><h2>Produtos</h2>
+<input id="pn" placeholder="Nome (ex: Camiseta Coastal Purpose Preta M)"><input id="ps" placeholder="SKU (opcional)"><input id="pd" placeholder="Descrição curta"><input id="pf" type="file" accept="image/*"><input id="pid" type="hidden">
+<button onclick="saveProd()">Salvar produto</button><span id="pm"></span>
+<div class="tw"><table><tbody id="pl"></tbody></table></div></section>
+<section><h2>Gerar lote</h2>
+<select id="prod"></select><input id="batch" placeholder="Lote (ex: Drop 01)"><input id="qty" type="number" min="1" max="2000" value="50" style="width:90px">
+<button onclick="gen()">Gerar e salvar</button><button class="s" onclick="csv()">Baixar CSV do último lote</button><button class="s" onclick="genericQR()">Baixar QR geral (PNG)</button><button class="s" onclick="serialSheet()">Etiquetas só com código</button><button class="s" onclick="sheet()">Imprimir etiquetas QR do último lote</button>
+<p id="gm"></p></section>
+<section><h2>Códigos</h2><input id="f" placeholder="Buscar código, produto, lote" oninput="render()">
+<div class="tw"><table><thead><tr><th>Código</th><th>Produto</th><th>Lote</th><th>Consultas</th><th>Status</th><th></th></tr></thead><tbody id="tb"></tbody></table></div>
+<div id="qr"></div></section>
+<section><h2>Últimas consultas</h2><div class="tw"><table><tbody id="lg"></tbody></table></div></section>
+<button class="s" onclick="db.auth.signOut().then(()=>location.reload())">Sair</button></div>
+<script src="config.js"></script>
+<script>
+const db=supabase.createClient(SUPABASE_URL,SUPABASE_KEY),$=i=>document.getElementById(i);
+let rows=[],last=[],prods=[];
+async function login(){const{error}=await db.auth.signInWithPassword({email:$("em").value,password:$("pw").value});if(error)$("le").textContent="Login inválido";else init()}
+async function init(){const{data:{session}}=await db.auth.getSession();if(!session)return;$("login").classList.add("hide");$("app").classList.remove("hide");load()}
+async function load(){await loadProds();
+  const a=await db.from("codes").select("*").order("id",{ascending:false}).limit(5000);rows=a.data||[];
+  const l=await db.from("scan_log").select("*").order("id",{ascending:false}).limit(30);
+  $("s1").textContent=rows.length;$("s2").textContent=rows.filter(r=>r.scans>0).length;$("s3").textContent=rows.filter(r=>r.scans>1).length;
+  $("s4").textContent=(await db.from("scan_log").select("id",{count:"exact",head:true}).eq("result","invalid")).count||0;
+  $("lg").innerHTML=(l.data||[]).map(x=>`<tr><td>${new Date(x.at).toLocaleString("pt-BR")}</td><td>${x.code}</td><td>${x.result}</td></tr>`).join("");render()}
+function render(){const f=$("f").value.toLowerCase();
+  $("tb").innerHTML=rows.filter(r=>(r.code+r.product+r.batch).toLowerCase().includes(f)).slice(0,200).map(r=>
+  `<tr><td>${r.code}</td><td>${r.product}</td><td>${r.batch}</td><td>${r.scans}</td><td>${r.status}</td><td><button class="s" onclick="qr('${r.code}')">QR</button><button class="s" onclick="dl('${r.code}')">PNG</button><button class="s" onclick="tog(${r.id},'${r.status}')">${r.status==="active"?"Cancelar":"Reativar"}</button></td></tr>`).join("")}
+function rnd(n){const c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";let s="";const a=crypto.getRandomValues(new Uint8Array(n));for(const x of a)s+=c[x%c.length];return s}
+async function gen(){const pr=prods.find(x=>x.id==$("prod").value),p=pr&&pr.name,b=$("batch").value.trim(),n=+$("qty").value;if(!pr||!b||!n)return $("gm").textContent="Preencha produto, lote e quantidade.";
+  const set=new Set();while(set.size<n)set.add(`ROKO-${rnd(4)}-${rnd(4)}`);
+  last=[...set].map(code=>({code,product:p,product_id:pr.id,batch:b}));
+  const{error}=await db.from("codes").insert(last);
+  $("gm").textContent=error?"Erro: "+error.message:`${n} códigos salvos.`;if(!error)load()}
+function csv(){if(!last.length)return alert("Gere um lote primeiro.");
+  const t="codigo,produto,lote,url\n"+last.map(r=>`${r.code},"${r.product}","${r.batch}",${SITE_URL}/?c=${r.code}`).join("\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([t],{type:"text/csv"}));a.download="lote-roko.csv";a.click()}
+function qr(c){$("qr").innerHTML="<p>"+c+"</p>";new QRCode($("qr"),{text:`${SITE_URL}/?c=${c}`,width:200,height:200})}
+
+function qrUrl(c,size){const d=document.createElement("div");new QRCode(d,{text:`${SITE_URL}/?c=${c}`,width:size,height:size,correctLevel:QRCode.CorrectLevel.H});return d.querySelector("canvas").toDataURL("image/png")}
+function dl(c){const a=document.createElement("a");a.href=qrUrl(c,600);a.download=c+".png";a.click()}
+function sheet(){if(!last.length)return alert("Gere um lote primeiro.");
+  const w=window.open("","_blank");
+  w.document.write("<title>Etiquetas ROKO</title><style>body{font-family:sans-serif;margin:10mm}.g{display:grid;grid-template-columns:repeat(4,1fr);gap:6mm}.e{border:1px dashed #999;padding:4mm;text-align:center;break-inside:avoid;font-size:9pt}.e img{width:30mm;height:30mm}</style><div class='g'>"+
+  last.map(r=>`<div class='e'><img src='${qrUrl(r.code,300)}'><br><b>${r.code}</b><br>Escaneie para verificar</div>`).join("")+"</div><script>onload=()=>print()<\/script>");w.document.close()}
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function loadProds(){
+  const r=await db.from("products").select("*").order("id",{ascending:false});prods=r.data||[];
+  const cur=$("prod").value;$("prod").innerHTML=prods.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("");if(cur)$("prod").value=cur;
+  $("pl").innerHTML=prods.map(p=>`<tr><td>${p.image_url?`<img src="${esc(p.image_url)}" width="40" height="40" style="object-fit:cover;border-radius:4px">`:""}</td><td>${esc(p.name)}</td><td>${esc(p.sku)}</td><td><button class="s" onclick="editProd(${p.id})">Editar</button><button class="s" onclick="delProd(${p.id})">Excluir</button></td></tr>`).join("")}
+async function saveProd(){
+  const n=$("pn").value.trim();if(!n)return $("pm").textContent="Informe o nome.";
+  const o={name:n,sku:$("ps").value.trim()||null,description:$("pd").value.trim()||null};
+  const f=$("pf").files[0];
+  if(f){const path=Date.now()+"-"+f.name.replace(/[^a-z0-9.]/gi,"_");
+    const u=await db.storage.from("products").upload(path,f);if(u.error)return $("pm").textContent="Erro na foto: "+u.error.message;
+    o.image_url=db.storage.from("products").getPublicUrl(path).data.publicUrl}
+  const id=$("pid").value;
+  const{error}=id?await db.from("products").update(o).eq("id",id):await db.from("products").insert(o);
+  $("pm").textContent=error?"Erro: "+error.message:"Produto salvo.";
+  if(!error){["pn","ps","pd","pf","pid"].forEach(i=>$(i).value="");loadProds()}}
+function editProd(id){const p=prods.find(x=>x.id===id);$("pid").value=id;$("pn").value=p.name;$("ps").value=p.sku||"";$("pd").value=p.description||"";$("pm").textContent="Editando. Para trocar a foto, escolha outra; senão deixe vazio."}
+async function delProd(id){if(!confirm("Excluir este produto? Os códigos já gerados continuam valendo."))return;await db.from("products").delete().eq("id",id);loadProds()}
+function genericQR(){const d=document.createElement("div");new QRCode(d,{text:SITE_URL+"/",width:800,height:800,correctLevel:QRCode.CorrectLevel.H});
+  const l=document.createElement("a");l.href=d.querySelector("canvas").toDataURL("image/png");l.download="qr-geral-roko.png";l.click()}
+function serialSheet(){if(!last.length)return alert("Gere um lote primeiro.");
+  const w=window.open("","_blank");
+  w.document.write("<title>Códigos ROKO</title><style>body{font-family:sans-serif;margin:10mm}.g{display:grid;grid-template-columns:repeat(4,1fr);gap:4mm}.e{border:1px dashed #999;padding:5mm 2mm;text-align:center;break-inside:avoid;font:700 12pt monospace;letter-spacing:.08em}.e small{display:block;font:400 7pt sans-serif;margin-bottom:2mm}</style><div class='g'>"+
+  last.map(r=>`<div class='e'><small>Código de autenticidade</small>${r.code}</div>`).join("")+"</div><script>onload=()=>print()<\/script>");w.document.close()}
+async function tog(id,s){await db.from("codes").update({status:s==="active"?"revoked":"active"}).eq("id",id);load()}
+init();
+</script></body></html>

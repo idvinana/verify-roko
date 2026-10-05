@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verificar autenticidade — ROKO IKIGAI</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@800&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<style>
+:root{--sand:#EFE6D6;--sea:#0E3B43;--coral:#E4572E;--ink:#12201F;--ok:#1F7A4D;--warn:#B7791F;--bad:#B3261E}
+*{box-sizing:border-box;margin:0}body{font-family:Inter,sans-serif;background:var(--sand);color:var(--ink);min-height:100vh;display:flex;flex-direction:column}
+header{padding:20px 24px;font:800 1.1rem 'Bricolage Grotesque';letter-spacing:.04em;color:var(--sea)}
+main{flex:1;display:grid;place-items:center;padding:24px}.card{width:100%;max-width:480px}
+h1{font:800 clamp(2rem,8vw,3rem)/1.05 'Bricolage Grotesque';color:var(--sea);margin-bottom:12px}
+.lead{margin-bottom:28px;line-height:1.5;max-width:42ch}label{display:block;font-weight:500;margin-bottom:8px}
+input{width:100%;padding:16px;font:500 1.1rem Inter;letter-spacing:.12em;text-transform:uppercase;border:2px solid var(--sea);background:#fff;border-radius:4px}
+button{margin-top:12px;width:100%;padding:16px;font:500 1rem Inter;background:var(--sea);color:#fff;border:0;border-radius:4px;cursor:pointer}
+input:focus-visible,button:focus-visible{outline:3px solid var(--coral);outline-offset:2px}
+button.alt{background:none;color:var(--sea);border:2px solid var(--sea)}
+#cam{display:none;margin-top:12px}#cam video{width:100%;border-radius:4px;background:#000}
+#r{margin-top:24px;padding:18px;border-left:6px solid;background:#fff;border-radius:4px;display:none;line-height:1.5}
+#r b{display:block;font:800 1.3rem 'Bricolage Grotesque';margin-bottom:4px}
+.ok{border-color:var(--ok)}.ok b{color:var(--ok)}.warn{border-color:var(--warn)}.warn b{color:var(--warn)}.bad{border-color:var(--bad)}.bad b{color:var(--bad)}
+footer{padding:20px;text-align:center;font-size:.85rem;color:var(--sea)}
+</style></head><body>
+<header>ROKO IKIGAI</header>
+<main><div class="card">
+<h1>Sua peça é original?</h1>
+<p class="lead">Digite o código da etiqueta interna ou escaneie o QR code da peça.</p>
+<label for="c">Código da peça</label>
+<input id="c" placeholder="ROKO-XXXX-XXXX" autocomplete="off" maxlength="24">
+<button id="b">Verificar código</button>
+<button class="alt" id="sc">Escanear QR code</button>
+<div id="cam"><video id="v" playsinline muted></video><button class="alt" id="stop">Cancelar</button></div>
+<div id="r" role="status" aria-live="polite"></div>
+</div></main>
+<footer>Dúvidas? Fale com a gente em @rookoikigai</footer>
+<script src="config.js"></script>
+<script>
+const db=supabase.createClient(SUPABASE_URL,SUPABASE_KEY),$=i=>document.getElementById(i);
+function show(t,h,m){const r=$("r");r.className=t;r.style.display="block";r.innerHTML="<b></b><span></span>";r.firstChild.textContent=h;r.lastChild.textContent=m}
+const fmt=d=>new Date(d).toLocaleDateString("pt-BR");
+async function verify(){
+  const v=$("c").value.trim();if(!v)return show("bad","Digite um código","Ele fica na etiqueta interna da peça.");
+  $("b").disabled=true;
+  const{data,error}=await db.rpc("verify_code",{p_code:v});
+  $("b").disabled=false;
+  if(error)return show("bad","Erro de conexão","Tente novamente em instantes.");
+  if(data.status==="ok")show("ok","Peça original ✓",`${data.product} — ${data.batch}. Primeira verificação deste código.`);
+  else if(data.status==="repeat")show("warn","Código já verificado",`${data.product} — ${data.batch}. Consultado ${data.scans} vezes, desde ${fmt(data.first_scan)}. Se não foi você, desconfie.`);
+  else if(data.status==="revoked")show("bad","Código cancelado","Este código foi invalidado pela marca. Fale com a gente.");
+  else show("bad","Código não encontrado","Confira o código. Se continuar assim, a peça pode não ser original.");
+  if(data.status==="ok"||data.status==="repeat")detail(data);
+}
+function detail(d){const r=$("r");
+  if(d.image){const i=document.createElement("img");i.src=d.image;i.alt=d.product;i.style="width:100%;border-radius:4px;margin-top:12px";r.appendChild(i)}
+  if(d.sku||d.description){const p=document.createElement("p");p.style.marginTop="8px";p.textContent=[d.sku&&("SKU: "+d.sku),d.description].filter(Boolean).join(" — ");r.appendChild(p)}}
+$("b").onclick=verify;$("c").onkeydown=e=>e.key==="Enter"&&verify();
+
+// ===== Scanner de QR pela câmera =====
+let stream=null,raf=0;
+function stopScan(){cancelAnimationFrame(raf);if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$("cam").style.display="none"}
+function codeFrom(t){try{return new URL(t).searchParams.get("c")||t}catch(e){return t}}
+async function startScan(){
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}})}
+  catch(e){return show("bad","Câmera indisponível","Permita o acesso à câmera ou digite o código manualmente.")}
+  const v=$("v");v.srcObject=stream;await v.play();$("cam").style.display="block";
+  const cv=document.createElement("canvas"),cx=cv.getContext("2d",{willReadFrequently:true});
+  (function tick(){
+    if(v.readyState===v.HAVE_ENOUGH_DATA){
+      cv.width=v.videoWidth;cv.height=v.videoHeight;cx.drawImage(v,0,0);
+      const f=jsQR(cx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height);
+      if(f&&f.data){stopScan();$("c").value=codeFrom(f.data);return verify()}
+    }
+    raf=requestAnimationFrame(tick)})();
+}
+$("sc").onclick=startScan;$("stop").onclick=stopScan;
+$("c").focus();
+const q=new URLSearchParams(location.search).get("c");if(q){$("c").value=q;verify()}
+</script></body></html>
